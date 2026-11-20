@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseCSV, detectDelimiter, detectFormat, rowsToCards, dedupe } from '../csv.js';
+import { parseCSV, detectDelimiter, detectFormat, rowsToCards, dedupe, cardsToCSV, TEMPLATE_CSV, headerField } from '../csv.js';
 
 const FIXTURE = `Frances,Espanol,Tipo,Ejemplo,Ejemplo_ES
 "le, la, les","el, la, los/las (artículo); lo, la, los (pronombre)",artículo / pronombre,Le chat dort sur la chaise.,El gato duerme en la silla.
@@ -22,6 +22,8 @@ test('fixture: 3 tarjetas con comas y comillas bien interpretadas', () => {
     front: 'le, la, les',
     back: 'el, la, los/las (artículo); lo, la, los (pronombre)',
     type: 'artículo / pronombre',
+    notes: '',
+    examples: [{ fr: 'Le chat dort sur la chaise.', es: 'El gato duerme en la silla.', use: '' }],
     example: 'Le chat dort sur la chaise.',
     exampleTranslation: 'El gato duerme en la silla.',
   });
@@ -47,7 +49,7 @@ test('reimportar el fixture: 0 nuevas y 3 omitidas', () => {
 });
 
 test('duplicados dentro del mismo archivo se omiten', () => {
-  const r = dedupe([{ front: 'chat' }, { front: ' Chat ' }, { front: 'chien' }], []);
+  const r = dedupe([{ front: 'chat', back: 'gato' }, { front: ' Chat ', back: 'gato' }, { front: 'chien', back: 'perro' }], []);
   assert.equal(r.toAdd.length, 2);
   assert.equal(r.skipped, 1);
 });
@@ -107,8 +109,55 @@ test('encabezado con acentos y mayúsculas se reconoce', () => {
   assert.equal(c.exampleTranslation, 'El gato.');
 });
 
-test('filas vacías y sin reverso se ignoran; sin salto final', () => {
+test('filas vacías se ignoran; sin reverso no se agregan como nuevas; sin salto final', () => {
   const { rows } = parseCSV('chat,gato\n\nsolo\nchien,perro');
   const cards = rowsToCards(rows, { front: 0, back: 1 }, false);
-  assert.equal(cards.length, 2);
+  assert.equal(cards.length, 3);
+  const r = dedupe(cards, []);
+  assert.equal(r.toAdd.length, 2);
+  assert.equal(r.skipped, 1);
+});
+
+test('formato 1.1: varios usos numerados, etiquetas y notas', () => {
+  const text = 'Frances,Espanol,Tipo,Ejemplo,Ejemplo_ES,Uso,Ejemplo2,Ejemplo2_ES,Uso2,Ejemplo 3,Ejemplo 3 ES,Notas\n' +
+    'le,"el; lo",artículo / pronombre,Le chat dort.,El gato duerme.,artículo,Je le vois.,Lo veo.,pronombre,,,Delante de vocal: l’\n';
+  const { rows } = parseCSV(text);
+  const det = detectFormat(rows);
+  assert.equal(det.format, 'principal');
+  assert.equal(det.mapping.examples.length, 3);
+  const [c] = rowsToCards(rows, det.mapping, true);
+  assert.deepEqual(c.examples, [
+    { fr: 'Le chat dort.', es: 'El gato duerme.', use: 'artículo' },
+    { fr: 'Je le vois.', es: 'Lo veo.', use: 'pronombre' },
+  ]);
+  assert.equal(c.notes, 'Delante de vocal: l’');
+  assert.equal(c.example, 'Le chat dort.');
+});
+
+test('encabezados de usos: variantes aceptadas', () => {
+  assert.deepEqual(headerField('Ejemplo_ES'), { ex: 1, part: 'es' });
+  assert.deepEqual(headerField('Ejemplo2_ES'), { ex: 2, part: 'es' });
+  assert.deepEqual(headerField('ejemplo 12'), { ex: 12, part: 'fr' });
+  assert.deepEqual(headerField('Uso3'), { ex: 3, part: 'use' });
+  assert.deepEqual(headerField('Notas'), { field: 'notes' });
+  assert.equal(headerField('Otra cosa'), null);
+});
+
+test('exportar a CSV y volver a importar da los mismos datos', () => {
+  const cards = [
+    { front: 'le, la, les', back: 'el "la"', type: 'art.', notes: 'nota\ncon salto', examples: [{ fr: 'A, b', es: 'c', use: 'x' }, { fr: 'D', es: '', use: '' }] },
+    { front: 'être', back: 'ser', type: '', notes: '', examples: [] },
+  ];
+  const { rows } = parseCSV(cardsToCSV(cards));
+  const det = detectFormat(rows);
+  const back = rowsToCards(rows, det.mapping, det.hasHeader);
+  assert.deepEqual(back.map(({ front, back, type, notes, examples }) => ({ front, back, type, notes, examples })), cards);
+});
+
+test('la plantilla se importa con varios usos', () => {
+  const { rows } = parseCSV(TEMPLATE_CSV);
+  const det = detectFormat(rows);
+  const cards = rowsToCards(rows, det.mapping, det.hasHeader);
+  assert.equal(cards.length, 3);
+  assert.equal(cards[1].examples.length, 3);
 });

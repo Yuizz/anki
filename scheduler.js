@@ -184,13 +184,28 @@ function byDue(a, b) {
   return a.due - b.due || String(a.id).localeCompare(String(b.id));
 }
 
+/** Hash estable (FNV-1a) para ordenar las nuevas al azar sin que el orden cambie entre recargas. */
+export function hashStr(str) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return h >>> 0;
+}
+
+function byRandom(a, b) {
+  return hashStr(String(a.pairId || a.id)) - hashStr(String(b.pairId || b.id)) || (a.dir === 'rev') - (b.dir === 'rev');
+}
+
 function byCreated(a, b) {
   return (a.createdAt || 0) - (b.createdAt || 0) || (a.order || 0) - (b.order || 0) || String(a.id).localeCompare(String(b.id));
 }
 
 /**
  * Construye la cola del día.
- * opts: now, newPerDay, reviewsPerDay, newDone, reviewsDone, buried (Set de ids a omitir hoy), cutoffHour, learnAheadMinutes
+ * opts: now, newPerDay, reviewsPerDay, newDone, reviewsDone, buried (Set de ids a omitir hoy), cutoffHour,
+ * learnAheadMinutes, newOrder ('added' | 'random')
  */
 export function buildQueue(cards, opts = {}) {
   const now = opts.now ?? Date.now();
@@ -209,7 +224,7 @@ export function buildQueue(cards, opts = {}) {
     .slice(0, revLeft);
   const news = cards
     .filter((c) => (c.state === 'new' || !c.state) && !buried.has(c.id))
-    .sort(byCreated)
+    .sort(opts.newOrder === 'random' ? byRandom : byCreated)
     .slice(0, newLeft);
   return { learnDueNow, learnToday, reviews, news, main: interleave(reviews, news) };
 }

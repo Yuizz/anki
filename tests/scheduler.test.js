@@ -183,3 +183,12 @@ test('la versión del service worker coincide con la de la app', () => {
   const sw = readFileSync(new URL('../sw.js', import.meta.url), 'utf8').match(/VERSION = '([^']+)'/)[1];
   assert.equal(app, sw);
 });
+
+test('orden aleatorio de nuevas: estable y distinto del orden de creación', () => {
+  const news = Array.from({ length: 30 }, (_, i) => card({ id: `n${i}`, createdAt: i }));
+  const a = buildQueue(news, { now: NOW, newPerDay: 30, newOrder: 'random' }).news.map((c) => c.id);
+  const b = buildQueue([...news].reverse(), { now: NOW, newPerDay: 30, newOrder: 'random' }).news.map((c) => c.id);
+  assert.deepEqual(a, b);
+  assert.notDeepEqual(a, news.map((c) => c.id));
+  assert.equal(new Set(a).size, 30);
+});

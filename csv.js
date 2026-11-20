@@ -1,13 +1,15 @@
-// Parser CSV (RFC 4180) y conversión a tarjetas. Funciones puras.
+// Parser CSV (RFC 4180), detección de formato y exportación. Funciones puras.
 
-export const FIELDS = ['front', 'back', 'type', 'example', 'exampleTranslation'];
+export const FIELDS = ['front', 'back', 'type', 'notes', 'example', 'exampleTranslation', 'use'];
 
 export const FIELD_LABELS = {
   front: 'Frente (francés)',
   back: 'Reverso (español)',
   type: 'Tipo',
+  notes: 'Notas',
   example: 'Ejemplo',
   exampleTranslation: 'Traducción del ejemplo',
+  use: 'Uso (etiqueta del ejemplo)',
 };
 
 export function stripBOM(text) {
@@ -36,14 +38,12 @@ export function detectDelimiter(text) {
     }
   }
   if (lines < 20) for (const c of candidates) counts[c].push(line[c]);
-  // Puntaje: líneas con el separador y consistencia de la cantidad.
   let best = ',';
   let bestScore = -1;
   for (const c of candidates) {
-    const arr = counts[c].filter((n, idx) => n > 0 || idx === 0);
     const first = counts[c][0] || 0;
     if (first === 0) continue;
-    const consistent = arr.filter((n) => n === first).length;
+    const consistent = counts[c].filter((n) => n === first).length;
     const score = consistent * 1000 + first;
     if (score > bestScore) {
       bestScore = score;
@@ -53,7 +53,7 @@ export function detectDelimiter(text) {
   return best;
 }
 
-/** Parsea texto CSV/TSV. Devuelve un arreglo de filas (arreglos de strings). Omite filas vacías. */
+/** Parsea texto CSV/TSV. Devuelve { rows, delimiter }. Omite filas vacías. */
 export function parseCSV(input, delimiter) {
   const text = stripBOM(String(input));
   const sep = delimiter || detectDelimiter(text);
@@ -68,7 +68,7 @@ export function parseCSV(input, delimiter) {
   };
   const pushRow = () => {
     pushField();
-    if (!(row.length === 1 && row[0].trim() === '')) rows.push(row);
+    if (!row.every((f) => f.trim() === '')) rows.push(row);
     row = [];
   };
   while (i < text.length) {
@@ -118,56 +118,86 @@ export function normalizeHeader(s) {
     .replace(/[^a-z0-9]/g, '');
 }
 
-const HEADER_MAP = {
+const SIMPLE = {
   frances: 'front',
   french: 'front',
   francais: 'front',
+  front: 'front',
   espanol: 'back',
   spanish: 'back',
+  back: 'back',
   tipo: 'type',
   type: 'type',
-  ejemplo: 'example',
-  example: 'example',
-  ejemploes: 'exampleTranslation',
-  ejemplospanish: 'exampleTranslation',
-  ejemplotraduccion: 'exampleTranslation',
+  notas: 'notes',
+  nota: 'notes',
+  notes: 'notes',
 };
 
-/**
- * Analiza las filas: si el encabezado es el formato principal devuelve
- * { format: 'principal', hasHeader: true, mapping }, si no { format: 'generico', hasHeader: false, mapping: col1→front, col2→back }.
- * mapping: { front: índice, back: índice, type: índice|-1, ... }
- */
-export function detectFormat(rows) {
-  const header = (rows[0] || []).map(normalizeHeader);
-  const mapping = Object.fromEntries(FIELDS.map((f) => [f, -1]));
-  header.forEach((h, idx) => {
-    const f = HEADER_MAP[h];
-    if (f && mapping[f] === -1) mapping[f] = idx;
-  });
-  if (mapping.front !== -1 && mapping.back !== -1) {
-    return { format: 'principal', hasHeader: true, mapping, columns: rows[0].length };
-  }
-  const columns = Math.max(0, ...rows.slice(0, 50).map((r) => r.length));
-  return {
-    format: 'generico',
-    hasHeader: false,
-    columns,
-    mapping: { front: 0, back: columns > 1 ? 1 : -1, type: -1, example: -1, exampleTranslation: -1 },
-  };
+/** Interpreta un encabezado. Devuelve { field } o { ex: n, part: 'fr'|'es'|'use' } o null. */
+export function headerField(raw) {
+  const h = normalizeHeader(raw);
+  if (SIMPLE[h]) return { field: SIMPLE[h] };
+  let m = h.match(/^(?:ejemplo|example)(\d*)(es|traduccion|spanish|espanol)$/);
+  if (m) return { ex: Number(m[1] || 1), part: 'es' };
+  m = h.match(/^(?:ejemplo|example)(\d*)(?:fr)?$/);
+  if (m) return { ex: Number(m[1] || 1), part: 'fr' };
+  m = h.match(/^(?:uso|use|sentido|acepcion)(\d*)$/);
+  if (m) return { ex: Number(m[1] || 1), part: 'use' };
+  return null;
 }
 
-/** Convierte filas en datos de tarjeta según el mapeo. Omite filas sin frente o sin reverso. */
+const emptyMapping = () => ({ front: -1, back: -1, type: -1, notes: -1, examples: [] });
+
+/**
+ * Analiza las filas. Con encabezado reconocido devuelve el formato 'principal' y su mapeo
+ * (incluye Ejemplo2, Ejemplo2_ES, Uso2…). Si no, formato 'generico': columna 1 → frente, columna 2 → reverso.
+ * mapping: { front, back, type, notes, examples: [{ fr, es, use }] } con índices de columna (o -1).
+ */
+export function detectFormat(rows) {
+  const header = rows[0] || [];
+  const mapping = emptyMapping();
+  const exByN = new Map();
+  header.forEach((raw, idx) => {
+    const f = headerField(raw);
+    if (!f) return;
+    if (f.field) {
+      if (mapping[f.field] === -1) mapping[f.field] = idx;
+      return;
+    }
+    if (!exByN.has(f.ex)) exByN.set(f.ex, { fr: -1, es: -1, use: -1 });
+    const e = exByN.get(f.ex);
+    if (e[f.part] === -1) e[f.part] = idx;
+  });
+  mapping.examples = [...exByN.keys()].sort((a, b) => a - b).map((n) => exByN.get(n)).filter((e) => e.fr !== -1);
+  const columns = Math.max(0, ...rows.slice(0, 50).map((r) => r.length));
+  if (mapping.front !== -1 && mapping.back !== -1) return { format: 'principal', hasHeader: true, mapping, columns };
+  const generic = emptyMapping();
+  generic.front = 0;
+  generic.back = columns > 1 ? 1 : -1;
+  return { format: 'generico', hasHeader: false, mapping: generic, columns };
+}
+
+/** Convierte filas en datos de tarjeta. Omite filas sin frente (el reverso se valida al planear la importación). */
 export function rowsToCards(rows, mapping, hasHeader) {
   const data = hasHeader ? rows.slice(1) : rows;
+  const cell = (r, idx) => (idx != null && idx >= 0 && idx < r.length ? String(r[idx]).trim() : '');
   const out = [];
   for (const r of data) {
-    const card = {};
-    for (const f of FIELDS) {
-      const idx = mapping[f];
-      card[f] = idx != null && idx >= 0 && idx < r.length ? String(r[idx]).trim() : '';
+    const examples = [];
+    for (const m of mapping.examples || []) {
+      const fr = cell(r, m.fr);
+      if (fr) examples.push({ fr, es: cell(r, m.es), use: cell(r, m.use) });
     }
-    if (card.front && card.back) out.push(card);
+    const card = {
+      front: cell(r, mapping.front),
+      back: cell(r, mapping.back),
+      type: cell(r, mapping.type),
+      notes: cell(r, mapping.notes),
+      examples,
+      example: examples[0]?.fr || '',
+      exampleTranslation: examples[0]?.es || '',
+    };
+    if (card.front) out.push(card);
   }
   return out;
 }
@@ -183,7 +213,7 @@ export function dedupe(incoming, existingFronts) {
   let skipped = 0;
   for (const c of incoming) {
     const k = frontKey(c.front);
-    if (seen.has(k)) {
+    if (seen.has(k) || !c.back) {
       skipped++;
       continue;
     }
@@ -192,3 +222,59 @@ export function dedupe(incoming, existingFronts) {
   }
   return { toAdd, skipped };
 }
+
+// ---------- Exportación ----------
+
+function quote(v) {
+  const s = String(v ?? '');
+  return /[",\r\n;\t]/.test(s) || /^\s|\s$/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+export function toCSV(rows) {
+  return rows.map((r) => r.map(quote).join(',')).join('\r\n') + '\r\n';
+}
+
+/** Encabezado del formato 1.1: compatible con el original (Frances,Espanol,Tipo,Ejemplo,Ejemplo_ES). */
+export function headerFor(nExamples) {
+  const h = ['Frances', 'Espanol', 'Tipo', 'Ejemplo', 'Ejemplo_ES', 'Uso'];
+  for (let i = 2; i <= nExamples; i++) h.push(`Ejemplo${i}`, `Ejemplo${i}_ES`, `Uso${i}`);
+  h.push('Notas');
+  return h;
+}
+
+/** Exporta tarjetas (con `examples`) a CSV en el formato 1.1. */
+export function cardsToCSV(cards) {
+  const n = Math.max(1, ...cards.map((c) => c.examples?.length || 0));
+  const rows = [headerFor(n)];
+  for (const c of cards) {
+    const r = [c.front, c.back, c.type || ''];
+    for (let i = 0; i < n; i++) {
+      const e = c.examples?.[i];
+      r.push(e?.fr || '', e?.es || '', e?.use || '');
+    }
+    r.push(c.notes || '');
+    rows.push(r);
+  }
+  return toCSV(rows);
+}
+
+export const TEMPLATE_CSV = toCSV([
+  headerFor(3),
+  [
+    'le, la, les',
+    'el, la, los/las; lo, la, los',
+    'artículo / pronombre',
+    'Le chat dort sur la chaise.',
+    'El gato duerme en la silla.',
+    'artículo',
+    'Je la vois tous les jours.',
+    'La veo todos los días.',
+    'pronombre',
+    '',
+    '',
+    '',
+    'Delante de vocal: l’',
+  ],
+  ['être', 'ser, estar', 'verbo', 'Je suis ingénieur.', 'Soy ingeniero.', 'profesión', 'Nous sommes à Paris.', 'Estamos en París.', 'lugar', 'Il est midi.', 'Es mediodía.', 'hora', 'Irregular'],
+  ['aujourd’hui', 'hoy', 'adverbio', 'Aujourd’hui, il fait froid.', 'Hoy hace frío.', '', '', '', '', '', '', '', ''],
+]);

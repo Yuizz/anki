@@ -1,5 +1,6 @@
 // Service worker cache-first para el app shell.
-const VERSION = '1.0.0';
+// Al cambiar cualquier archivo, sube VERSION (y la de app.js): el caché nuevo reemplaza al anterior.
+const VERSION = '1.1.0';
 const CACHE = `tarjetas-v${VERSION}`;
 const SHELL = [
   './',
@@ -9,12 +10,14 @@ const SHELL = [
   './db.js',
   './scheduler.js',
   './csv.js',
+  './model.js',
   './tts.js',
+  './icons.js',
   './manifest.webmanifest',
   './icons/icon-192.png',
   './icons/icon-512.png',
-  './icons/apple-touch-icon.png',
   './icons/icon-512-maskable.png',
+  './icons/apple-touch-icon.png',
 ];
 
 self.addEventListener('install', (event) => {
@@ -43,7 +46,12 @@ self.addEventListener('fetch', (event) => {
   event.respondWith(
     (async () => {
       const cache = await caches.open(CACHE);
-      const hit = await cache.match(req, { ignoreSearch: req.mode === 'navigate' });
+      // Cualquier navegación dentro del scope abre la app desde el caché (con o sin red).
+      if (req.mode === 'navigate') {
+        const shell = (await cache.match('./index.html')) || (await cache.match('./'));
+        if (shell) return shell;
+      }
+      const hit = await cache.match(req, { ignoreSearch: true });
       if (hit) return hit;
       try {
         const res = await fetch(req);
@@ -54,7 +62,7 @@ self.addEventListener('fetch', (event) => {
           const shell = await cache.match('./index.html');
           if (shell) return shell;
         }
-        throw err;
+        return new Response('Sin conexión', { status: 503, statusText: 'Sin conexión' });
       }
     })(),
   );
