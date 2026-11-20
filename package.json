@@ -1,0 +1,10 @@
+{
+  "name": "tarjetas",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "PWA de tarjetas de francés con repaso espaciado",
+  "scripts": {
+    "test": "node --test"
+  }
+}
