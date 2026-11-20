@@ -2,7 +2,7 @@
 
 App web (PWA) para estudiar vocabulario de francés con repaso espaciado al estilo Anki (SM-2). Funciona sin conexión, se instala en la pantalla de inicio del iPhone y guarda todo en el dispositivo (IndexedDB). No tiene login ni backend.
 
-**URL:** https://yuizz.github.io/tarjetas/
+**URL:** https://yuizz.github.io/anki/
 
 ## Instalar en el iPhone
 
